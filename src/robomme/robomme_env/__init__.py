@@ -3,6 +3,7 @@ from .PickXtimes import *
 from .SwingXtimes import *
 from .ButtonUnmask import *
 from .VideoUnmask import *
+from .VideoUnmaskDIYHaiMachine import *
 from .PickHighlight import *
 from .VideoUnmaskSwap import *
 from .VideoRepick import *
