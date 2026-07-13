@@ -1,8 +1,8 @@
-"""Generate a fixed-layout VideoUnmask sequence demo.
+"""Generate a fixed-layout VideoUnmask missing-cube sequence demo.
 
 The scene starts like ``run_video_unmask_diy_hai_machine.py``:
 
-1. three colored cubes are visible,
+1. two colored cubes are visible and one cover hides empty space,
 2. three covers descend smoothly,
 3. the robot sequentially removes each cover and puts it back.
 
@@ -32,7 +32,7 @@ from robomme.robomme_env.utils.subgoal_planner_func import (
 )
 
 
-OUT_DIR = Path("outputs/occlusion_unmask_diy_sequence_hai_machine_2026-07-09")
+OUT_DIR = Path("outputs/occlusion_unmask_diy_missing_cube_hai_machine_2026-07-09")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -193,7 +193,7 @@ def pick_show_put_back(env, planner, obj, show_offset_xy, label: str):
 
 
 def main():
-    out_path = OUT_DIR / "VideoUnmaskDIYHaiMachine_fixed_positions_reveal_each_cover.mp4"
+    out_path = OUT_DIR / "VideoUnmaskDIYHaiMachine_missing_red_cube_reveal_each_cover.mp4"
 
     env = gym.make(
         "VideoUnmaskDIYHaiMachine",
@@ -203,6 +203,7 @@ def main():
         reward_mode="dense",
         seed=0,
         difficulty="easy",
+        diy_present_cube_indices=[0, 2],
     )
 
     frames = []

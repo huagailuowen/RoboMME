@@ -718,6 +718,7 @@ def build_button(
             name: str = "button",  # ⭐ New: button name
             randomize: bool = True,  # ⭐ New: whether to randomize position
             randomize_range=(0.1, 0.4),  # ⭐ New: randomization range, (range_x, range_y)
+            cap_color=None,
     ):
         # ------- Scaling and Travel -------
         if scale is None:
@@ -789,7 +790,9 @@ def build_button(
             pose=sapien.Pose(p=[0, 0, cap_half_len], q=R_up), density=1500
         )
         material = sapien.render.RenderMaterial()
-        material.set_base_color([0.5, 0.5, 0.5, 1.0])
+        material.set_base_color(
+            [0.5, 0.5, 0.5, 1.0] if cap_color is None else list(cap_color)
+        )
         cap.add_cylinder_visual(
             half_length=cap_half_len, radius=cap_radius,
             pose=sapien.Pose(p=[0, 0, cap_half_len], q=R_up), material=material

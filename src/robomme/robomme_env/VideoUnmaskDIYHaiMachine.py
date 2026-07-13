@@ -53,6 +53,11 @@ class VideoUnmaskDIYHaiMachine(VideoUnmask):
         self.diy_bin_positions = kwargs.pop("diy_bin_positions", None) or self.DIY_BIN_POSITIONS
         self.diy_color_names = kwargs.pop("diy_color_names", None) or self.DIY_COLOR_NAMES
         self.diy_cube_colors = kwargs.pop("diy_cube_colors", None) or self.DIY_CUBE_COLORS
+        present_cube_indices = kwargs.pop("diy_present_cube_indices", None)
+        if present_cube_indices is None:
+            present_cube_indices = range(len(self.diy_bin_positions))
+        self.diy_present_cube_indices = set(int(i) for i in present_cube_indices)
+        self.diy_hidden_cube_z = float(kwargs.pop("diy_hidden_cube_z", -1.0))
         self.cover_start_step = int(kwargs.pop("cover_start_step", self.COVER_START_STEP))
         self.cover_duration_steps = int(kwargs.pop("cover_duration_steps", self.COVER_DURATION_STEPS))
         self.cover_height = float(kwargs.pop("cover_height", self.COVER_HEIGHT))
@@ -114,6 +119,7 @@ class VideoUnmaskDIYHaiMachine(VideoUnmask):
             self._set_actor_pose_np(bin_actor, high_p, q)
 
         spawned_dynamic_cubes = []
+        self._diy_cube_nominal_poses = []
         self.color_names = list(self.diy_color_names)
         for i, (xy, color, color_name) in enumerate(
             zip(self.diy_bin_positions, self.diy_cube_colors, self.color_names)
@@ -130,6 +136,7 @@ class VideoUnmaskDIYHaiMachine(VideoUnmask):
             spawned_dynamic_cubes.append(cube_actor)
             setattr(self, f"target_cube_{color_name}", cube_actor)
             setattr(self, f"target_cube_{i}", cube_actor)
+            self._diy_cube_nominal_poses.append(self._actor_pose_np(cube_actor))
 
         tasks = [
             {
@@ -159,7 +166,31 @@ class VideoUnmaskDIYHaiMachine(VideoUnmask):
 
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
         super()._initialize_episode(env_idx, options)
+        for actor, (_, q), (high_p, _) in zip(
+            self.spawned_bins, self._diy_bin_final_poses, self._diy_bin_high_poses
+        ):
+            self._set_actor_pose_np(actor, high_p, q)
+        self._apply_cube_presence()
         self._apply_cover_animation(cur_step=0)
+
+    def set_present_cube_indices(self, present_cube_indices):
+        """Select logically present cubes without rebuilding the renderer."""
+        indices = {int(i) for i in present_cube_indices}
+        if not indices.issubset({0, 1, 2}):
+            raise ValueError(f"Cube indices must be in [0, 2], got {sorted(indices)}")
+        self.diy_present_cube_indices = indices
+        if hasattr(self, "_diy_cube_nominal_poses"):
+            self._apply_cube_presence()
+
+    def _apply_cube_presence(self):
+        for i, (nominal_p, nominal_q) in enumerate(self._diy_cube_nominal_poses):
+            actor = getattr(self, f"target_cube_{i}")
+            if i in self.diy_present_cube_indices:
+                p = nominal_p
+            else:
+                p = nominal_p.copy()
+                p[2] = self.diy_hidden_cube_z
+            self._set_actor_pose_np(actor, p, nominal_q)
 
     def _apply_cover_animation(self, cur_step: int | None = None):
         if not hasattr(self, "spawned_bins"):

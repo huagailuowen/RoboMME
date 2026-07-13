@@ -1,10 +1,11 @@
-"""Generate a fixed-layout VideoUnmask sequence demo.
+"""Generate a fixed-layout VideoUnmask reveal-swap-reveal demo.
 
 The scene starts like ``run_video_unmask_diy_hai_machine.py``:
 
-1. three colored cubes are visible,
-2. three covers descend smoothly,
-3. the robot sequentially removes each cover and puts it back.
+1. the scene starts fully covered,
+2. the robot sequentially removes each cover and puts it back,
+3. two covers swap positions,
+4. the robot sequentially removes each cover and puts it back again.
 
 This script is a local hai-machine demo script and intentionally keeps the
 upstream RoboMME environments unchanged.
@@ -32,7 +33,7 @@ from robomme.robomme_env.utils.subgoal_planner_func import (
 )
 
 
-OUT_DIR = Path("outputs/occlusion_unmask_diy_sequence_hai_machine_2026-07-09")
+OUT_DIR = Path("outputs/occlusion_unmask_diy_reveal_swap_reveal_hai_machine_2026-07-09")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -127,6 +128,53 @@ def _wait(env, steps: int, gripper: float = 1.0):
         env.step(_hold_action(env, gripper=gripper))
 
 
+def _set_actor_pose(env, actor, p, q):
+    env.unwrapped._set_actor_pose_np(actor, np.asarray(p, dtype=np.float32), np.asarray(q, dtype=np.float32))
+
+
+def _smoothstep(x: float):
+    x = float(np.clip(x, 0.0, 1.0))
+    return x * x * (3.0 - 2.0 * x)
+
+
+def scripted_swap_bins(env, frames, bin_a, bin_b, label: str, steps: int = 80, lane_offset: float = 0.075):
+    """Scripted shell-game-style swap for two covers.
+
+    This keeps the three cubes untouched and moves only the two covers.  The
+    covers remain near table height, so the scene looks like a covered-object
+    swap instead of a reveal.
+    """
+    pa0, qa = _pose_from_actor(bin_a)
+    pb0, qb = _pose_from_actor(bin_b)
+    delta = pb0[:2] - pa0[:2]
+    norm = float(np.linalg.norm(delta))
+    if norm < 1e-6:
+        lateral = np.array([0.0, lane_offset], dtype=np.float32)
+    else:
+        direction = delta / norm
+        lateral = np.array([-direction[1], direction[0]], dtype=np.float32) * lane_offset
+
+    for i in range(int(steps)):
+        alpha = _smoothstep(i / max(1, steps - 1))
+        lane = np.sin(np.pi * alpha) * lateral
+
+        pa = pa0 * (1.0 - alpha) + pb0 * alpha
+        pb = pb0 * (1.0 - alpha) + pa0 * alpha
+        pa[:2] += lane
+        pb[:2] -= lane
+
+        _set_actor_pose(env, bin_a, pa, qa)
+        _set_actor_pose(env, bin_b, pb, qb)
+        obs, _, _, _, _ = env.step(_hold_action(env, gripper=1.0))
+        frames.append(_frame(obs, label))
+
+    _set_actor_pose(env, bin_a, pb0, qa)
+    _set_actor_pose(env, bin_b, pa0, qb)
+    for _ in range(8):
+        obs, _, _, _, _ = env.step(_hold_action(env, gripper=1.0))
+        frames.append(_frame(obs, label))
+
+
 def _make_bin_grasp_poses(env, obj):
     env_u = env.unwrapped
     obb = get_actor_obb(obj)
@@ -193,7 +241,7 @@ def pick_show_put_back(env, planner, obj, show_offset_xy, label: str):
 
 
 def main():
-    out_path = OUT_DIR / "VideoUnmaskDIYHaiMachine_fixed_positions_reveal_each_cover.mp4"
+    out_path = OUT_DIR / "VideoUnmaskDIYHaiMachine_fully_covered_reveal_swap_reveal.mp4"
 
     env = gym.make(
         "VideoUnmaskDIYHaiMachine",
@@ -203,20 +251,14 @@ def main():
         reward_mode="dense",
         seed=0,
         difficulty="easy",
+        cover_start_step=-1,
+        cover_duration_steps=1,
+        cover_settle_steps=0,
     )
 
     frames = []
     obs, _ = env.reset()
-    frames.append(_frame(obs, "start: cubes visible, covers above"))
-
-    cover_steps = (
-        env.unwrapped.cover_start_step
-        + env.unwrapped.cover_duration_steps
-        + env.unwrapped.cover_settle_steps
-    )
-    for _ in range(cover_steps):
-        obs, _, _, _, _ = env.step(_hold_action(env, gripper=1.0))
-        frames.append(_frame(obs, "smooth cover descent"))
+    frames.append(_frame(obs, "start: fully covered"))
 
     planner = FailAwarePandaArmMotionPlanningSolver(
         env,
@@ -238,13 +280,35 @@ def main():
 
     env.step = recording_step
 
-    sequence = [
-        ("green cover: reveal and put back", env.unwrapped.bin_0, [0.00, 0.12]),
-        ("red cover: reveal and put back", env.unwrapped.bin_1, [-0.10, 0.00]),
-        ("blue cover: reveal and put back", env.unwrapped.bin_2, [0.00, 0.12]),
+    before_swap_sequence = [
+        ("before swap: reveal cover 0 and put back", env.unwrapped.bin_0, [0.00, 0.12]),
+        ("before swap: reveal cover 1 and put back", env.unwrapped.bin_1, [-0.10, 0.00]),
+        ("before swap: reveal cover 2 and put back", env.unwrapped.bin_2, [0.00, 0.12]),
     ]
 
-    for label, obj, offset in sequence:
+    for label, obj, offset in before_swap_sequence:
+        phase["label"] = label
+        pick_show_put_back(env, planner, obj, offset, label)
+
+    phase["label"] = "scripted swap: cover 0 <-> cover 1"
+    recording_step = env.step
+    env.step = original_step
+    scripted_swap_bins(
+        env,
+        frames,
+        env.unwrapped.bin_0,
+        env.unwrapped.bin_1,
+        "scripted swap: cover 0 <-> cover 1",
+    )
+    env.step = recording_step
+
+    after_swap_sequence = [
+        ("after swap: reveal cover 0 and put back", env.unwrapped.bin_0, [0.00, 0.12]),
+        ("after swap: reveal cover 1 and put back", env.unwrapped.bin_1, [-0.10, 0.00]),
+        ("after swap: reveal cover 2 and put back", env.unwrapped.bin_2, [0.00, 0.12]),
+    ]
+
+    for label, obj, offset in after_swap_sequence:
         phase["label"] = label
         pick_show_put_back(env, planner, obj, offset, label)
 
