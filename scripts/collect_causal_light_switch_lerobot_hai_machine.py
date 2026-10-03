@@ -224,7 +224,17 @@ def _expected_lamp_states(sequence: list[str], control_color: str) -> list[bool]
     return states
 
 
-def _create_dataset(root: Path, repo_id: str) -> LeRobotDataset:
+def _create_dataset(
+    root: Path,
+    repo_id: str,
+    *,
+    action_dim: int = 8,
+    action_names: list[str] | None = None,
+) -> LeRobotDataset:
+    if action_names is None:
+        action_names = [f"action_{index}" for index in range(action_dim)]
+    if len(action_names) != action_dim:
+        raise ValueError("action_names length must equal action_dim")
     image_feature = {
         "dtype": "video",
         "shape": (3, IMAGE_SIZE[0], IMAGE_SIZE[1]),
@@ -260,8 +270,8 @@ def _create_dataset(root: Path, repo_id: str) -> LeRobotDataset:
         },
         "action": {
             "dtype": "float32",
-            "shape": (8,),
-            "names": [f"action_{index}" for index in range(8)],
+            "shape": (action_dim,),
+            "names": action_names,
         },
     }
     return LeRobotDataset.create(
@@ -281,7 +291,13 @@ def _create_dataset(root: Path, repo_id: str) -> LeRobotDataset:
 
 
 class EpisodeRecorder:
-    def __init__(self, dataset: LeRobotDataset, env, episode_index: int):
+    def __init__(
+        self,
+        dataset: LeRobotDataset,
+        env,
+        episode_index: int,
+        action_transform=None,
+    ):
         self.dataset = dataset
         self.env = env
         self.episode_index = episode_index
@@ -289,6 +305,7 @@ class EpisodeRecorder:
         self.phase = "initial_observation"
         self.phase_start = 0
         self.phase_ranges: list[dict[str, Any]] = []
+        self.action_transform = action_transform
 
     def set_phase(self, phase: str) -> None:
         if phase == self.phase:
@@ -310,16 +327,19 @@ class EpisodeRecorder:
     def add(self, obs: dict[str, Any], action=None) -> None:
         base_image = _rgb(obs, "base_camera")
         wrist_image = _rgb(obs, "hand_camera")
+        action_value = _normalize_action(action, self.env)
+        if self.action_transform is not None:
+            action_value = self.action_transform(action_value)
         frame = {
             "observation.images.image": base_image,
             "observation.images.wrist_image": wrist_image,
             "observation.state": _robot_state(self.env),
             "observation.eef_state": _eef_state(self.env),
             "observation.button_lamp_state": _button_lamp_state(self.env),
-            "action": _normalize_action(action, self.env),
+            "action": action_value,
         }
         task = [
-            "infer which colored button controls the lamp",
+            "infer which colored buttons control the lamp",
             self.phase,
             "successful scripted physical-button rollout",
             "success",
@@ -427,7 +447,12 @@ def _collect_episode(
     }
 
 
-def _validate_dataset(root: Path, repo_id: str, expected_episodes: int) -> dict[str, Any]:
+def _validate_dataset(
+    root: Path,
+    repo_id: str,
+    expected_episodes: int,
+    expected_action_dim: int = 8,
+) -> dict[str, Any]:
     dataset = LeRobotDataset(
         repo_id=repo_id,
         root=root,
@@ -453,7 +478,7 @@ def _validate_dataset(root: Path, repo_id: str, expected_episodes: int) -> dict[
                 raise RuntimeError(
                     f"bad {image_key} shape at frame {index}: {frame[image_key].shape}"
                 )
-        if tuple(frame["action"].shape) != (8,):
+        if tuple(frame["action"].shape) != (expected_action_dim,):
             raise RuntimeError(f"bad action shape at frame {index}")
         if tuple(frame["observation.button_lamp_state"].shape) != (9,):
             raise RuntimeError(f"bad causal-state shape at frame {index}")

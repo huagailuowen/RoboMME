@@ -41,15 +41,29 @@ class CausalLightSwitchDIYHaiMachine(BaseEnv):
         robot_uids="panda_wristcam",
         robot_init_qpos_noise=0,
         control_button_color="blue",
+        control_button_colors=None,
+        initial_lamp_on=False,
         red_button_xy=None,
         blue_button_xy=None,
         **kwargs,
     ):
-        control_button_color = str(control_button_color).lower()
-        if control_button_color not in self.BUTTON_POSITIONS:
-            raise ValueError("control_button_color must be 'red' or 'blue'")
+        if control_button_colors is None:
+            controls = {str(control_button_color).lower()}
+        else:
+            if isinstance(control_button_colors, str):
+                control_button_colors = [control_button_colors]
+            controls = {str(color).lower() for color in control_button_colors}
+        invalid_controls = controls.difference(self.BUTTON_POSITIONS)
+        if invalid_controls:
+            raise ValueError(
+                f"control button colors must be red/blue, got {sorted(invalid_controls)}"
+            )
         self.robot_init_qpos_noise = robot_init_qpos_noise
-        self.control_button_color = control_button_color
+        self.control_button_colors = frozenset(controls)
+        self.control_button_color = (
+            next(iter(controls)) if len(controls) == 1 else None
+        )
+        self.initial_lamp_on = bool(initial_lamp_on)
         self.button_positions = {
             "red": np.asarray(
                 self.BUTTON_POSITIONS["red"] if red_button_xy is None else red_button_xy,
@@ -60,7 +74,7 @@ class CausalLightSwitchDIYHaiMachine(BaseEnv):
                 dtype=np.float32,
             ),
         }
-        self.lamp_on = False
+        self.lamp_on = self.initial_lamp_on
         self.button_press_counts = {"red": 0, "blue": 0}
         self.press_history = []
         self._button_latched = {"red": False, "blue": False}
@@ -177,7 +191,7 @@ class CausalLightSwitchDIYHaiMachine(BaseEnv):
                 button.set_qpos(torch.zeros_like(button.get_qpos()))
                 button.set_qvel(torch.zeros_like(button.get_qvel()))
         self._apply_button_positions()
-        self.lamp_on = False
+        self.lamp_on = self.initial_lamp_on
         self.button_press_counts = {"red": 0, "blue": 0}
         self.press_history = []
         self._button_latched = {"red": False, "blue": False}
@@ -194,19 +208,35 @@ class CausalLightSwitchDIYHaiMachine(BaseEnv):
         *,
         red_button_xy,
         blue_button_xy,
-        control_button_color: str,
+        control_button_color: str | None = None,
+        control_button_colors=None,
+        initial_lamp_on: bool = False,
     ) -> None:
         """Configure the hidden cause and button layout used by the next reset."""
-        control_button_color = str(control_button_color).lower()
-        if control_button_color not in self.BUTTON_POSITIONS:
-            raise ValueError("control_button_color must be 'red' or 'blue'")
+        if control_button_colors is None:
+            if control_button_color is None:
+                raise ValueError("a control button color or color set is required")
+            controls = {str(control_button_color).lower()}
+        else:
+            if isinstance(control_button_colors, str):
+                control_button_colors = [control_button_colors]
+            controls = {str(color).lower() for color in control_button_colors}
+        invalid_controls = controls.difference(self.BUTTON_POSITIONS)
+        if invalid_controls:
+            raise ValueError(
+                f"control button colors must be red/blue, got {sorted(invalid_controls)}"
+            )
         positions = {
             "red": np.asarray(red_button_xy, dtype=np.float32).reshape(2),
             "blue": np.asarray(blue_button_xy, dtype=np.float32).reshape(2),
         }
         if not all(np.isfinite(position).all() for position in positions.values()):
             raise ValueError("button positions must be finite XY coordinates")
-        self.control_button_color = control_button_color
+        self.control_button_colors = frozenset(controls)
+        self.control_button_color = (
+            next(iter(controls)) if len(controls) == 1 else None
+        )
+        self.initial_lamp_on = bool(initial_lamp_on)
         self.button_positions = positions
 
     def _apply_button_positions(self) -> None:
@@ -241,7 +271,7 @@ class CausalLightSwitchDIYHaiMachine(BaseEnv):
                 self._button_latched[color] = True
                 before = bool(self.lamp_on)
                 self.button_press_counts[color] += 1
-                controls_lamp = color == self.control_button_color
+                controls_lamp = color in self.control_button_colors
                 if controls_lamp:
                     self.lamp_on = not self.lamp_on
                     self._apply_lamp_visual()
